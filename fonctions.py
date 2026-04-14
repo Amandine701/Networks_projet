@@ -3,6 +3,7 @@ import itertools
 import networkx as nx
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy.stats
 
 # Fonction pour la constitution des df dfjoint_complet (réseau complet)
 # dfjoint_micro (réseau ne contenant que les liens créés par les utilisateurs ayant moins (<=) de 100 followers
@@ -55,7 +56,7 @@ def constitution_df(path_data_check_in, path_data_users):
 
     # Réseaux micro et macro
     dfjoint_micro = dfjoint_complet[dfjoint_complet['nb_twitter_followers'] <= 100]
-    dfjoint_macro = dfjoint_complet[dfjoint_complet['nb_twitter_followers'] >= 2000]
+    dfjoint_macro = dfjoint_complet[dfjoint_complet['nb_twitter_followers'] >= 1000]
 
     return dfjoint_complet, dfjoint_micro, dfjoint_macro
 
@@ -66,19 +67,18 @@ def constitution_df(path_data_check_in, path_data_users):
 def construction_reseau(df):
     df = df.copy()
 
-    # Étape 1 : toutes les paires de lieux par utilisateur
+    # Toutes les paires de lieux par utilisateur
     df['edges'] = df['checkins'].apply(
         lambda x: list(itertools.combinations(x, 2))
     )
 
-    # Étape 2 : flatten
     edges = [edge for sublist in df['edges'] for edge in sublist]
 
-    # Étape 3 : création du graphe
+    # Création du graphe
     G = nx.Graph()
     G.add_edges_from(edges)
 
-    # Étape 4 : suppression des self-loops
+    # Suppression des self-loops
     G.remove_edges_from(nx.selfloop_edges(G))
 
     return G
@@ -100,7 +100,7 @@ def powerLaw(x, a, b):
 
 
 # Tracé de la distribution des degrés des noeuds du réseau
-def degree_distribution(G, titre='Distribution des degrés', color='#EB7009', markersize=8, bins=50):
+def degree_distribution(G, titre='Distribution des degrés', color='#1B263B', markersize=8, bins=50):
 
     # Liste des degrés des nœuds
     kDict = dict(G.degree())
@@ -115,4 +115,35 @@ def degree_distribution(G, titre='Distribution des degrés', color='#EB7009', ma
     plt.xlabel('Degré k', size=15)
     plt.ylabel('P(k)', size=15)
     plt.title(titre, size=16, weight='bold')
+    plt.show()
+
+# Rregroupement les données dans des log-bins et nous traçons la moyenne de $knn$ pour chaque log-bin.
+def plot_knn_logbins(G, titre='Degré moyen des voisins <knn>(k)', num_bins=15, alpha=0.1, marker_color='#1B263B', marker_size=10):
+   
+    # Calcul des degrés et knn
+    kDict = dict(G.degree())
+    knn = nx.average_neighbor_degree(G)
+    
+    # Extraction des valeurs pour tracé
+    xx = [kDict[n] for n in knn.keys()]
+    yy = [knn[n] for n in knn.keys()]
+    
+    # Tracé des points bruts
+    plt.figure(figsize=(8,6))
+    plt.loglog(xx, yy, 'o', alpha=alpha, color=marker_color)
+    
+    # Bins logarithmiques
+    logBins = np.logspace(np.log2(np.min(xx)), np.log2(np.max(xx)), base=2, num=num_bins)
+    
+    # Moyenne des knn par bin
+    ybin, xbin, binnumber = scipy.stats.binned_statistic(xx, yy, statistic='mean', bins=logBins)
+    
+    # Tracé des moyennes par bin
+    plt.loglog(xbin[:-1], ybin, 'o', markersize=marker_size, color='black')
+    
+    # Labels et titre
+    plt.xlabel('k', size=15)
+    plt.ylabel('knn(k)', size=15)
+    plt.title(titre, size=16, weight='bold')
+    plt.grid(True, which="both", ls="--", lw=0.5)
     plt.show()
