@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats
 import random
-
+from collections import defaultdict
 
 # Fonction pour la constitution des df dfjoint_complet (réseau complet)
 # dfjoint_micro (réseau ne contenant que les liens créés par les utilisateurs ayant moins (<=) de 100 followers
@@ -250,3 +250,91 @@ def plot_stacked_degree_categories(G, n_bins=15, top_n_categories=23):
     )
     plt.tight_layout()
     plt.show()
+
+
+# Association lieu/utilisateur
+def build_location_users(df, verbose=True):
+
+    loc_users = defaultdict(list)
+
+    for _, row in df.iterrows():
+
+        if not isinstance(row['checkins'], list):
+            continue
+
+        user = str(row['user_id'])
+
+        for loc in row['checkins']:
+            loc_users[str(loc)].append(user)
+
+    if verbose:
+        print("✔ location_users construit")
+        print("exemple:", list(loc_users.items())[:3])
+
+    return loc_users
+
+
+# Ajout de la popularité moyenne de ces utilisateurs (mesurée par le nombre moyen de followers twitter) pour chaque établissement
+def add_location_popularity(G, df, df_users, verbose=True):
+
+    user_pop = dict(zip(
+        df_users['user_id'].astype(str),
+        df_users['nb_twitter_followers']
+    ))
+
+    loc_users = build_location_users(df, verbose=False)
+
+    avg_pop = {}
+
+    empty_locs = 0
+
+    for loc, users in loc_users.items():
+
+        vals = []
+        for u in users:
+            if u in user_pop:
+                v = user_pop[u]
+                if not np.isnan(v):
+                    vals.append(v)
+
+        if len(vals) > 0:
+            avg_pop[str(loc)] = np.mean(vals)
+        else:
+            empty_locs += 1
+
+    nx.set_node_attributes(G, avg_pop, 'avg_popularity')
+
+    if verbose:
+        print("✔ popularity ajoutée")
+        print("nodes avec pop:", len(avg_pop))
+        print("locs sans pop:", empty_locs)
+
+        sample = list(nx.get_node_attributes(G, 'avg_popularity').items())[:3]
+        print("sample attr:", sample)
+
+    return G
+
+# Calcul d'un indice rich-club au regard du nombre moyen de followers des utilisateurs de chaque établissement
+def popularity_club_coefficient(G, n_bins=50):
+    pop = nx.get_node_attributes(G, 'avg_popularity')
+
+    nodes = [n for n in G.nodes if n in pop and not np.isnan(pop[n])]
+    pop_values = np.array([pop[n] for n in nodes])
+
+    thresholds = np.linspace(pop_values.min(), pop_values.max(), n_bins)
+
+    coeff = []
+
+    for t in thresholds:
+        rich_nodes = [n for n in nodes if pop[n] >= t]
+        sub = G.subgraph(rich_nodes)
+
+        n = sub.number_of_nodes()
+        e = sub.number_of_edges()
+
+        if n < 2:
+            coeff.append(np.nan)
+        else:
+            coeff.append(2 * e / (n * (n - 1)))
+
+    return thresholds, coeff
