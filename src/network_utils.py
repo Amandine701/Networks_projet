@@ -4,6 +4,8 @@ import networkx as nx
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats
+import random
+
 
 # Fonction pour la constitution des df dfjoint_complet (réseau complet)
 # dfjoint_micro (réseau ne contenant que les liens créés par les utilisateurs ayant moins (<=) de 100 followers
@@ -20,7 +22,7 @@ def constitution_df(path_data_check_in, path_data_users):
         names=[
             'user_id','location_id','location_type_ID',
             'location_type_name','latitude','longitude',
-            'timezone','timestamp'
+            'timezone','timestamp', 'Venue_Category_Name'
         ]
     )
 
@@ -60,28 +62,80 @@ def constitution_df(path_data_check_in, path_data_users):
 
     return dfjoint_complet, dfjoint_micro, dfjoint_macro
 
+# Fonction pour la construction des réseaux
+def construction_reseau(dfjoint_complet, df_check_in):
+    """
+    dfagg_complet : contient la colonne 'checkins' (listes d'IDs) avec la liste de tous les check_ins par lieu
+    df_check_in : contient 'location_id' et 'location_type_name'
+    """
+    df = dfjoint_complet.copy()
 
-# Fonction pour la création du réseau (noeuds= établissements, arêtes= deux établissements sont liés 
-# si ils ont été visités par un même utilisateur)
-
-def construction_reseau(df):
-    df = df.copy()
-
-    # Toutes les paires de lieux par utilisateur
+    # Création des arêtes
     df['edges'] = df['checkins'].apply(
         lambda x: list(itertools.combinations(x, 2))
     )
-
     edges = [edge for sublist in df['edges'] for edge in sublist]
 
     # Création du graphe
     G = nx.Graph()
     G.add_edges_from(edges)
-
-    # Suppression des self-loops
     G.remove_edges_from(nx.selfloop_edges(G))
 
+    # Ajout des attributs (type d'établissement)
+    dict_categories = dict(zip(df_check_in['location_id'], 
+                               df_check_in['category_grouped']))
+    
+    # Assignation
+    nx.set_node_attributes(G, dict_categories, 'category_grouped')
+
     return G
+    
+    
+# Calcul de plusieurs métriques sur le réseau : nbre de noeuds, d'arêtes, densité, degré moyen,
+# distance moyenne (approximation)
+def afficher_infos_reseau(G, titre, k=100):
+    """
+    G: réseau
+    titre de l'affichage (ex: "caractéristiques du réseau macro")
+    k : nombre de nœuds à échantillonner pour l'approximation de la distance moyenne.
+    """
+    print("\n" + "="*50)
+    print(f"{titre}")
+    print("="*50)
+    
+    n_nodes = G.number_of_nodes()
+    n_edges = G.number_of_edges()
+    
+    print(f"Nombre de lieux (nœuds) : {n_nodes}")
+    print(f"Nombre de connexions (arêtes) : {n_edges}")
+    print(f"Densité du réseau : {nx.density(G):.4f}")
+    
+    deg_moyen = sum(dict(G.degree()).values()) / n_nodes
+    print(f"Degré moyen : {deg_moyen:.2f}")
+    
+    is_conn = nx.is_connected(G)
+    print(f"Réseau entièrement connecté : {is_conn}")
+    
+    # Approximation de la distance moyenne au sein du réseau
+    if is_conn:
+        # Si le réseau est petit, on garde le calcul exact
+        if n_nodes <= k:
+            avg_path = nx.average_shortest_path_length(G)
+            print(f"Distance moyenne (exacte) : {avg_path:.2f}")
+        else:
+            # On tire k nœuds au hasard
+            nodes_sample = random.sample(list(G.nodes()), k)
+            total_dist = 0
+            for node in nodes_sample:
+                # Calcule les distances du nœud source vers TOUS les autres
+                paths = nx.single_source_shortest_path_length(G, node)
+                total_dist += sum(paths.values())
+            
+            # Moyenne = (Somme des distances) / (nombre de chemins calculés)
+            avg_path_approx = total_dist / (k * (n_nodes - 1))
+            print(f"Distance moyenne (approx. avec k={k}) : {avg_path_approx:.2f}")
+    else:
+        print("Distance moyenne : non définie (réseau non connecté)")
 
 
 # Préparation des données pour un histogramme en échelle logarithmique
@@ -100,7 +154,7 @@ def powerLaw(x, a, b):
 
 
 # Tracé de la distribution des degrés des noeuds du réseau
-def degree_distribution(G, titre='Distribution des degrés', color='#1B263B', markersize=8, bins=50):
+def degree_distribution(G, titre='Distribution des degrés', color='#2A9D8F', markersize=8, bins=50):
 
     # Liste des degrés des nœuds
     kDict = dict(G.degree())
@@ -146,4 +200,53 @@ def plot_knn_logbins(G, titre='Degré moyen des voisins <knn>(k)', num_bins=15, 
     plt.ylabel('knn(k)', size=15)
     plt.title(titre, size=16, weight='bold')
     plt.grid(True, which="both", ls="--", lw=0.5)
+    plt.show()
+
+
+# Fonction pour tracer un histogramme présentant la part de chaque catégorie d'établissement par intervalle de degrés
+def plot_stacked_degree_categories(G, n_bins=15, top_n_categories=23):
+    # Extraire les données
+    data = []
+    for node, attrs in G.nodes(data=True):
+        deg = G.degree(node)
+        cat = attrs.get('category_grouped', 'Unknown') 
+        data.append({'degree': deg, 'category_grouped': cat})
+    
+    df = pd.DataFrame(data)
+
+    #  Créer les bins logarithmiques
+    kmin, kmax = df['degree'].min(), df['degree'].max()
+    if kmin <= 0: kmin = 1 
+    
+    # On crée les limites des bacs (bins)
+    bins = np.logspace(np.log10(kmin), np.log10(kmax), num=n_bins)
+    
+    # Assigner chaque degré à un bin (on utilise les intervalles comme labels)
+    df['bin'] = pd.cut(df['degree'], bins=bins, include_lowest=True)
+    
+    #  Table croisée
+    ct = pd.crosstab(df['bin'], df['category_grouped'], normalize='index')
+    
+    #  Tracé
+    ax = ct.plot(kind='bar', stacked=True, figsize=(14, 7), width=0.8, colormap='Set3', edgecolor='black')
+
+    plt.xlabel("Degré de connectivité (k)", size=12)
+    
+    # Graduation axe des abscisses : on garde l'intervalle complet mais on le formate (arrondi)
+    new_labels = [f"[{int(b.left)}-{int(b.right)}]" for b in ct.index]
+    
+    ax.set_xticklabels(new_labels)
+    
+    plt.xticks(rotation=45, ha='right', fontsize=9)
+    for label in ax.get_xticklabels():
+        label.set_visible(True)
+    # ---------------------------------
+    plt.legend(
+    title="Groupes",
+    loc='upper center',
+    bbox_to_anchor=(0.5, -0.15),
+    ncol=4,   # ou 3 selon le nombre de catégories
+    frameon=False
+    )
+    plt.tight_layout()
     plt.show()
