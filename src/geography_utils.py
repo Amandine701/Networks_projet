@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 import plotly.express as px
+import networkx as nx
+import itertools
 
 
 def import_location_data(path):
@@ -92,3 +94,46 @@ def preprocess_data(df):
     X = df[["latitude", "longitude", "nb_checkins"]].values
     X = StandardScaler().fit_transform(X)
     return X
+
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371.0  # Rayon de la Terre en km
+
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2
+    c = 2 * np.arcsin(np.sqrt(a))
+    return R * c
+
+
+def construction_reseau_physique(df_lieux, df_user_checkins):
+    G = nx.Graph()
+
+    # Initialisation de TOUS les nœuds pour éviter les disparités
+    G.add_nodes_from(df_lieux['location_id'])
+
+    # Création des arêtes (paires de lieux fréquentés par un même user)
+    all_edges = [edge for sublist in df_user_checkins['location_id'].apply(
+        lambda x: list(itertools.combinations(x, 2))) for edge in sublist]
+
+    for u, v in all_edges:
+        if G.has_edge(u, v):
+            G[u][v]['weight'] += 1
+        else:
+            G.add_edge(u, v, weight=1)
+
+    # Dictionnaires d'attributs (vérifie bien les noms des colonnes de df_lieux)
+    pop_dict = dict(zip(df_lieux['location_id'], df_lieux['popularity']))
+    lat_dict = dict(zip(df_lieux['location_id'], df_lieux['latitude']))
+    lon_dict = dict(zip(df_lieux['location_id'], df_lieux['longitude']))
+    cat_dict = dict(zip(df_lieux['location_id'], df_lieux['category_grouped']))
+
+    nx.set_node_attributes(G, pop_dict, 'pop')
+    nx.set_node_attributes(G, lat_dict, 'lat')
+    nx.set_node_attributes(G, lon_dict, 'lon')
+    nx.set_node_attributes(G, cat_dict, 'category')
+
+    return G
